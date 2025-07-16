@@ -3,6 +3,8 @@ from datetime import datetime
 from flask import Flask, request, redirect, session, send_file, render_template_string
 from threading import Thread
 from dotenv import load_dotenv
+if not os.path.exists("logs.txt"):
+    open("logs.txt", "w").close()
 
 # 🔐 Load environment variables
 load_dotenv()
