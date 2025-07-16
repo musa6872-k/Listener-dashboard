@@ -1,35 +1,36 @@
 import os
+import time
 import requests
 import subprocess
-import time
 from datetime import datetime
 from flask import Flask, request, redirect, session, send_file, render_template_string
 from threading import Thread
 from dotenv import load_dotenv
 
-# ✅ Create logs.txt if it doesn't exist
+# ✅ Ensure logs.txt exists
 if not os.path.exists("logs.txt"):
     open("logs.txt", "w").close()
 
-# Load environment variables
+# 🔐 Load secrets
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 PORT = int(os.getenv("PORT", 8080))
 
+# 🚀 Flask setup
 app = Flask(__name__)
-app.secret_key = "your_secret_key"
+app.secret_key = "your_secret_key"  # 🔒 Replace with a secure secret in production
 
-# 🧠 Authentication
+# 🔐 Session guard
 def login_required(f):
     def wrapper(*args, **kwargs):
-        if "logged_in" not in session:
+        if not session.get("logged_in"):
             return redirect("/login")
         return f(*args, **kwargs)
     wrapper.__name__ = f.__name__
     return wrapper
 
-# ✅ Login Route
+# 🔑 Login route
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -45,40 +46,43 @@ def login():
     </form>
     '''
 
-# 📥 Download logs.txt safely
+# 📥 Download route (fixed)
 @app.route("/download")
 @login_required
 def download():
-    log_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "logs.txt")
-    return send_file(log_path, as_attachment=True)
+    try:
+        log_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "logs.txt")
+        return send_file(log_path, as_attachment=True)
+    except Exception as e:
+        return f"Download failed: {e}", 500
 
-# 📬 Telegram Log Entry
-@app.route("/log", methods=["POST"])
-def log():
-    msg = request.form.get("message", "")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"[TELEGRAM] {timestamp} - {msg}\n"
-    with open("logs.txt", "a") as f:
-        f.write(entry)
-    return "Log added"
-
-# 📝 Dashboard Form Submit
+# 📝 Dashboard form logging
 @app.route("/submit", methods=["POST"])
 @login_required
 def submit():
-    msg = request.form.get("message", "")
+    message = request.form.get("message", "")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"[DASHBOARD] {timestamp} - {msg}\n"
+    entry = f"[DASHBOARD] {timestamp} - {message}\n"
     with open("logs.txt", "a") as f:
         f.write(entry)
     return redirect("/")
 
-# 🔍 Status Route
+# 📬 Telegram log endpoint
+@app.route("/log", methods=["POST"])
+def log():
+    message = request.form.get("message", "")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"[TELEGRAM] {timestamp} - {message}\n"
+    with open("logs.txt", "a") as f:
+        f.write(entry)
+    return "Log added"
+
+# 🔍 Status ping
 @app.route("/status")
 def status():
     return "Bot is running"
 
-# 📊 Dashboard Display
+# 📊 Dashboard home
 @app.route("/")
 @login_required
 def dashboard():
@@ -101,35 +105,34 @@ def dashboard():
     </ul>
     ''', logs=logs)
 
-# 🚪 Logout
+# 🚪 Logout route
 @app.route("/logout")
 def logout():
     session.pop("logged_in", None)
     return redirect("/login")
 
-# 🧵 Run background thread
+# 🧵 Run Flask in thread
 def start_flask():
     app.run(host="0.0.0.0", port=PORT)
 
 Thread(target=start_flask).start()
 
-# 🤖 Telegram Bot Listener
+# 🤖 Telegram bot listener
 def telegram_listener():
-    last_update = None
+    last_update_id = None
     while True:
-        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-        res = requests.get(url).json()
-        updates = res.get("result", [])
-        if updates:
+        try:
+            updates = requests.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates").json().get("result", [])
             for update in updates:
                 update_id = update["update_id"]
-                if last_update is None or update_id > last_update:
-                    last_update = update_id
+                if last_update_id is None or update_id > last_update_id:
+                    last_update_id = update_id
                     msg = update.get("message", {}).get("text", "")
                     if msg.startswith("/log"):
-                        content = msg[4:].strip()
-                        data = {"message": content}
-                        requests.post("http://localhost:{}/log".format(PORT), data=data)
+                        log_msg = msg[4:].strip()
+                        requests.post(f"http://localhost:{PORT}/log", data={"message": log_msg})
+        except Exception as e:
+            print(f"Error in Telegram listener: {e}")
         time.sleep(2)
 
-Thread(target=telegram_listener).start()
+Thread(target=telegram_listener).start() 
