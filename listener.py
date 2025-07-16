@@ -6,6 +6,7 @@ from datetime import datetime
 from flask import Flask, request, redirect, session, send_file, render_template_string
 from threading import Thread
 from dotenv import load_dotenv
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 # ✅ Ensure logs.txt exists
 if not os.path.exists("logs.txt"):
@@ -51,12 +52,11 @@ def login():
 @login_required
 def download():
     try:
-        log_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "logs.txt")
+        log_path = os.path.join(BASE_DIR, "logs.txt")
         return send_file(log_path, as_attachment=True)
     except Exception as e:
         return f"Download failed: {e}", 500
-
-# 📝 Dashboard form logging
+#Dashboard form logging
 @app.route("/submit", methods=["POST"])
 @login_required
 def submit():
