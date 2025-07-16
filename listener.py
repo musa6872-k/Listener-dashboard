@@ -6,11 +6,15 @@ from datetime import datetime
 from flask import Flask, request, redirect, session, send_file, render_template_string
 from threading import Thread
 from dotenv import load_dotenv
+
+# ✅ Get base directory safely
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 # ✅ Ensure logs.txt exists
-if not os.path.exists("logs.txt"):
-    open("logs.txt", "w").close()
+log_file = "logs.txt"
+log_path = os.path.join(BASE_DIR, log_file)
+if not os.path.exists(log_path):
+    open(log_path, "w").close()
 
 # 🔐 Load secrets
 load_dotenv()
@@ -20,7 +24,7 @@ PORT = int(os.getenv("PORT", 8080))
 
 # 🚀 Flask setup
 app = Flask(__name__)
-app.secret_key = "your_secret_key"  # 🔒 Replace with a secure secret in production
+app.secret_key = "your_secret_key"
 
 # 🔐 Session guard
 def login_required(f):
@@ -47,23 +51,23 @@ def login():
     </form>
     '''
 
-# 📥 Download route (fixed)
+# 📥 Fixed download route using BASE_DIR
 @app.route("/download")
 @login_required
 def download():
     try:
-        log_path = os.path.join(BASE_DIR, "logs.txt")
         return send_file(log_path, as_attachment=True)
     except Exception as e:
         return f"Download failed: {e}", 500
-#Dashboard form logging
+
+# 📝 Dashboard form logging
 @app.route("/submit", methods=["POST"])
 @login_required
 def submit():
     message = request.form.get("message", "")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[DASHBOARD] {timestamp} - {message}\n"
-    with open("logs.txt", "a") as f:
+    with open(log_path, "a") as f:
         f.write(entry)
     return redirect("/")
 
@@ -73,7 +77,7 @@ def log():
     message = request.form.get("message", "")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"[TELEGRAM] {timestamp} - {message}\n"
-    with open("logs.txt", "a") as f:
+    with open(log_path, "a") as f:
         f.write(entry)
     return "Log added"
 
@@ -87,7 +91,7 @@ def status():
 @login_required
 def dashboard():
     try:
-        with open("logs.txt", "r") as f:
+        with open(log_path, "r") as f:
             logs = f.readlines()
     except:
         logs = []
@@ -111,7 +115,7 @@ def logout():
     session.pop("logged_in", None)
     return redirect("/login")
 
-# 🧵 Run Flask in thread
+# 🧵 Run Flask in background
 def start_flask():
     app.run(host="0.0.0.0", port=PORT)
 
@@ -135,4 +139,4 @@ def telegram_listener():
             print(f"Error in Telegram listener: {e}")
         time.sleep(2)
 
-Thread(target=telegram_listener).start() 
+Thread(target=telegram_listener).start()
