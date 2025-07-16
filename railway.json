@@ -1,0 +1,8 @@
+{
+  "plugins": {
+    "python": {
+      "buildCommand": "pip install -r requirements.txt",
+      "startCommand": "python listener.py"
+    }
+  }
+}
