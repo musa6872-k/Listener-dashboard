@@ -165,8 +165,8 @@ def add_log():
 @app.route("/download")
 @login_required
 def download():
-    return send_file(log_file, as_attachment=True)
-
+    log_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "logs.txt")
+    return send_file(log_path, as_attachment=True)
 # 🚀 Start all services
 def start_services():
     Thread(target=telegram_loop).start()
