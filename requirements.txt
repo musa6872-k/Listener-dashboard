@@ -1,3 +1,6 @@
-flask
+Flask
 requests
+schedule
 python-dotenv
+openai
+werkzeug
