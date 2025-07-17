@@ -1,142 +1,148 @@
-import os
-import time
-import requests
-import subprocess
-from datetime import datetime
-from flask import Flask, request, redirect, session, send_file, render_template_string
+# Musa Log Suite – Unified Logging Platform
+import os, time, sqlite3, requests, schedule, smtplib, openai
 from threading import Thread
+from flask import Flask, request, redirect, session, send_file, render_template_string, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
+from email.mime.text import MIMEText
+from datetime import datetime, date
 from dotenv import load_dotenv
 
-# ✅ Get base directory safely
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-
-# ✅ Ensure logs.txt exists
-log_file = "logs.txt"
-log_path = os.path.join(BASE_DIR, log_file)
-if not os.path.exists(log_path):
-    open(log_path, "w").close()
-
-# 🔐 Load secrets
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
 PORT = int(os.getenv("PORT", 8080))
+EMAIL_HOST = os.getenv("EMAIL_HOST")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
+EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+SECRET_KEY = os.getenv("SECRET_KEY", "secret")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+API_TOKEN = os.getenv("API_TOKEN")
 
-# 🚀 Flask setup
+DB_PATH = "logs.db"
 app = Flask(__name__)
-app.secret_key = "your_secret_key"
+app.secret_key = SECRET_KEY
+openai.api_key = OPENAI_API_KEY
 
-# 🔐 Session guard
-def login_required(f):
-    def wrapper(*args, **kwargs):
-        if not session.get("logged_in"):
-            return redirect("/login")
-        return f(*args, **kwargs)
-    wrapper.__name__ = f.__name__
-    return wrapper
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, role TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, source TEXT, message TEXT, timestamp TEXT)")
+    try: c.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ("admin", generate_password_hash("pass123"), "admin"))
+    except: pass
+    conn.commit(); conn.close()
 
-# 🔑 Login route
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        if request.form["username"] == "admin" and request.form["password"] == "pass123":
-            session["logged_in"] = True
-            return redirect("/")
-        return "Invalid credentials"
-    return '''
-    <form method="post">
-        <input name="username" placeholder="Username"><br>
-        <input name="password" placeholder="Password" type="password"><br>
-        <input type="submit" value="Login">
-    </form>
-    '''
+def save_log(source, message):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT INTO logs (source, message, timestamp) VALUES (?, ?, ?)", (source, message, ts))
+    conn.commit(); conn.close()
+    if "ALERT" in message.upper():
+        send_email("🚨 Alert Triggered", f"[{source}] {message}")
 
-# 📥 Fixed download route using BASE_DIR
-@app.route("/download")
-@login_required
-def download():
+def fetch_logs(): return sqlite3.connect(DB_PATH).execute("SELECT source, message, timestamp FROM logs").fetchall()
+
+def summarize_logs():
+    logs = fetch_logs()
+    today_logs = [f"[{s}] {m}" for s, m, t in logs if t.startswith(str(date.today()))]
+    if not today_logs: return "No logs today."
+    prompt = "Summarize:\n" + "\n".join(today_logs)
     try:
-        return send_file(log_path, as_attachment=True)
+        res = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}])
+        return res.choices[0].message.content
     except Exception as e:
-        return f"Download failed: {e}", 500
+        return f"Summary error: {e}"
 
-# 📝 Dashboard form logging
-@app.route("/submit", methods=["POST"])
-@login_required
-def submit():
-    message = request.form.get("message", "")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"[DASHBOARD] {timestamp} - {message}\n"
-    with open(log_path, "a") as f:
-        f.write(entry)
-    return redirect("/")
-
-# 📬 Telegram log endpoint
-@app.route("/log", methods=["POST"])
-def log():
-    message = request.form.get("message", "")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"[TELEGRAM] {timestamp} - {message}\n"
-    with open(log_path, "a") as f:
-        f.write(entry)
-    return "Log added"
-
-# 🔍 Status ping
-@app.route("/status")
-def status():
-    return "Bot is running"
-
-# 📊 Dashboard home
-@app.route("/")
-@login_required
-def dashboard():
+def send_email(subject, body):
     try:
-        with open(log_path, "r") as f:
-            logs = f.readlines()
-    except:
-        logs = []
-    return render_template_string('''
-    <h2>🧠 Log Dashboard</h2>
-    <form method="post" action="/submit">
-        <input name="message" placeholder="Add log">
-        <input type="submit" value="Submit">
-    </form>
-    <a href="/download">📥 Download Logs</a>
-    <ul>
-    {% for log in logs %}
-        <li>{{ log }}</li>
-    {% endfor %}
-    </ul>
-    ''', logs=logs)
+        msg = MIMEText(body)
+        msg["Subject"], msg["From"], msg["To"] = subject, EMAIL_USER, EMAIL_RECEIVER
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as s:
+            s.starttls(); s.login(EMAIL_USER, EMAIL_PASS)
+            s.sendmail(msg["From"], [EMAIL_RECEIVER], msg.as_string())
+    except Exception as e: print(f"Email error: {e}")
 
-# 🚪 Logout route
-@app.route("/logout")
-def logout():
-    session.pop("logged_in", None)
-    return redirect("/login")
-
-# 🧵 Run Flask in background
-def start_flask():
-    app.run(host="0.0.0.0", port=PORT)
-
-Thread(target=start_flask).start()
-
-# 🤖 Telegram bot listener
-def telegram_listener():
-    last_update_id = None
+def telegram_bot():
+    last_id = None
     while True:
         try:
-            updates = requests.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates").json().get("result", [])
-            for update in updates:
-                update_id = update["update_id"]
-                if last_update_id is None or update_id > last_update_id:
-                    last_update_id = update_id
-                    msg = update.get("message", {}).get("text", "")
+            updates = requests.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates").json()["result"]
+            for u in updates:
+                uid = u["update_id"]
+                if last_id is None or uid > last_id:
+                    last_id = uid
+                    msg = u.get("message", {}).get("text", "")
+                    chat = u.get("message", {}).get("chat", {}).get("id")
                     if msg.startswith("/log"):
-                        log_msg = msg[4:].strip()
-                        requests.post(f"http://localhost:{PORT}/log", data={"message": log_msg})
-        except Exception as e:
-            print(f"Error in Telegram listener: {e}")
-        time.sleep(2)
+                        content = msg[4:].strip()
+                        save_log("TELEGRAM", content)
+                        requests.get(f"https://api.telegram.org/bot{TOKEN}/sendMessage", params={"chat_id": chat, "text": f"✅ Logged: {content}"})
+                    elif msg.startswith("/stats"):
+                        logs = fetch_logs()
+                        total = len(logs)
+                        srcs = {}; [srcs.update({s: srcs.get(s,0)+1}) for s,_,_ in logs]
+                        txt = f"📊 Total: {total}\n" + "\n".join([f"{s}: {c}" for s,c in srcs.items()])
+                        requests.get(f"https://api.telegram.org/bot{TOKEN}/sendMessage", params={"chat_id": chat, "text": txt})
+        except Exception as e: print(f"Bot error: {e}")
+        time.sleep(3)
 
-Thread(target=telegram_listener).start()
+def daily_report():
+    logs = fetch_logs()
+    today = date.today().isoformat()
+    today_logs = [l for l in logs if l[2].startswith(today)]
+    total = len(today_logs)
+    sources = {}
+    for s, _, _ in today_logs:
+        sources[s] = sources.get(s, 0) + 1
+    summary = summarize_logs()
+    body = f"📊 Logs Today: {total}\n" + "\n".join([f"{k}: {v}" for k,v in sources.items()]) + f"\n\n🧠 Summary:\n{summary}"
+    send_email("🗞️ Daily Report", body)
+
+schedule.every().day.at("07:00").do(daily_report)
+
+@app.before_request
+def api_guard():
+    if request.path.startswith("/api/") and API_TOKEN:
+        if request.headers.get("X-API-TOKEN") != API_TOKEN:
+            return jsonify({"error": "Unauthorized"}), 403
+
+@app.route("/")
+def dashboard():
+    logs = fetch_logs()[-30:]
+    return render_template_string('''
+        <h2>📘 Musa Log Suite</h2>
+        <form method="post" action="/log"><input name="message" placeholder="Enter log"><input type="submit"></form>
+        <ul>{% for s,m,t in logs %}<li><strong>[{{s}}]</strong> {{t}} – {{m}}</li>{% endfor %}</ul>
+    ''', logs=logs)
+
+@app.route("/log", methods=["POST"])
+def log(): msg = request.form.get("message"); save_log("DASHBOARD", msg); return redirect("/")
+
+@app.route("/api/v1/logs")
+def api_logs():
+    logs = fetch_logs()
+    return jsonify([{"source": s, "message": m, "timestamp": t} for s,m,t in logs])
+
+@app.route("/api/v1/search")
+def api_search():
+    q = request.args.get("q","").lower()
+    results = [l for l in fetch_logs() if q in l[1].lower()]
+    return jsonify([{"source": s, "message": m, "timestamp": t} for s,m,t in results])
+
+@app.route("/api/v1/stats")
+def api_stats():
+    logs = fetch_logs()
+    total = len(logs); srcs = {}; [srcs.update({s: srcs.get(s,0)+1}) for s,_,_ in logs]
+    return jsonify({"total": total, "by_source": srcs})
+
+@app.route("/api/v1/summary")
+def api_summary(): return jsonify({"summary": summarize_logs()})
+
+def launch():
+    init_db()
+    Thread(target=lambda: app.run(host="0.0.0.0", port=PORT)).start()
+    Thread(target=telegram_bot).start()
+    Thread(target=lambda: [schedule.run_pending() or time.sleep(60)]).start()
+
+if __name__ == "__main__": launch()
